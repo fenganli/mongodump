@@ -52,6 +52,9 @@ type ToolOptions struct {
 	// specified or discovered via the servers contacted.
 	ReplicaSetName string
 
+	// Timestamp string "sec:increment"
+	// TS string
+
 	// for caching the parser
 	parser *flags.Parser
 }

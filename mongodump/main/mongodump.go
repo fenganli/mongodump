@@ -6,11 +6,17 @@ import (
 	"github.com/mongodb/mongo-tools/common/options"
 	"github.com/mongodb/mongo-tools/common/util"
 	"github.com/mongodb/mongo-tools/mongodump"
+	"github.com/mongodb/mongo-tools/mongorestore"
 	"os"
+	"fmt"
 )
 
 func main() {
 	// initialize command-line opts
+	// --ts
+	// ts_string := flag.String("ts", "1:1", "time stamp string")
+	// flag.Parse()
+
 	opts := options.New("mongodump", mongodump.Usage, options.EnabledOptions{true, true, true})
 
 	inputOpts := &mongodump.InputOptions{}
@@ -40,6 +46,10 @@ func main() {
 	if opts.PrintVersion() {
 		return
 	}
+	
+	// ts_string := flag.String("ts", "1:1", "time stamp string")
+	// flag.Parse()
+	ts_string := "1450325712:1"
 
 	// init logger
 	log.SetVerbosity(opts.Verbosity)
@@ -55,10 +65,18 @@ func main() {
 		InputOptions:  inputOpts,
 	}
 
-	if err = dump.Init(); err != nil {
+	time_stamp, err := mongorestore.ParseTimestampFlag(ts_string)
+	if err != nil {
+		fmt.Errorf("couldn't get the timestamp from command arguments")
+		os.Exit(util.ExitError)
+	}
+	// dump.oplogStart = time_stamp 
+
+	if err = dump.Init(time_stamp); err != nil {
 		log.Logf(log.Always, "Failed: %v", err)
 		os.Exit(util.ExitError)
 	}
+	//dump.OplogStart = time_stamp
 
 	if err = dump.Dump(); err != nil {
 		log.Logf(log.Always, "Failed: %v", err)

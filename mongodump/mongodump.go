@@ -5,11 +5,8 @@ import (
 	"compress/gzip"
 	"fmt"
 	"github.com/mongodb/mongo-tools/common/archive"
-	"github.com/mongodb/mongo-tools/common/auth"
-	"github.com/mongodb/mongo-tools/common/bsonutil"
 	"github.com/mongodb/mongo-tools/common/db"
 	"github.com/mongodb/mongo-tools/common/intents"
-	"github.com/mongodb/mongo-tools/common/json"
 	"github.com/mongodb/mongo-tools/common/log"
 	"github.com/mongodb/mongo-tools/common/options"
 	"github.com/mongodb/mongo-tools/common/progress"
@@ -37,13 +34,14 @@ type MongoDump struct {
 	ToolOptions   *options.ToolOptions
 	InputOptions  *InputOptions
 	OutputOptions *OutputOptions
-
+        // OplogStart      bson.MongoTimestamp
+	
 	// useful internals that we don't directly expose as options
 	sessionProvider *db.SessionProvider
 	manager         *intents.Manager
 	query           bson.M
 	oplogCollection string
-	oplogStart      bson.MongoTimestamp
+        oplogStart      bson.MongoTimestamp
 	isMongos        bool
 	authVersion     int
 	archive         *archive.Writer
@@ -100,11 +98,12 @@ func (dump *MongoDump) ValidateOptions() error {
 }
 
 // Init performs preliminary setup operations for MongoDump.
-func (dump *MongoDump) Init() error {
+func (dump *MongoDump) Init(time_stamp bson.MongoTimestamp) error {
 	err := dump.ValidateOptions()
 	if err != nil {
 		return fmt.Errorf("bad option: %v", err)
 	}
+	dump.oplogStart = time_stamp
 	if dump.stdout == nil {
 		dump.stdout = os.Stdout
 	}
@@ -163,75 +162,6 @@ func (dump *MongoDump) Init() error {
 
 // Dump handles some final options checking and executes MongoDump.
 func (dump *MongoDump) Dump() (err error) {
-
-	if dump.InputOptions.HasQuery() {
-		// parse JSON then convert extended JSON values
-		var asJSON interface{}
-		content, err := dump.InputOptions.GetQuery()
-		if err != nil {
-			return err
-		}
-		err = json.Unmarshal(content, &asJSON)
-		if err != nil {
-			return fmt.Errorf("error parsing query as json: %v", err)
-		}
-		convertedJSON, err := bsonutil.ConvertJSONValueToBSON(asJSON)
-		if err != nil {
-			return fmt.Errorf("error converting query to bson: %v", err)
-		}
-		asMap, ok := convertedJSON.(map[string]interface{})
-		if !ok {
-			// unlikely to be reached
-			return fmt.Errorf("query is not in proper format")
-		}
-		dump.query = bson.M(asMap)
-	}
-
-	if dump.OutputOptions.DumpDBUsersAndRoles {
-		// first make sure this is possible with the connected database
-		dump.authVersion, err = auth.GetAuthVersion(dump.sessionProvider)
-		if err != nil {
-			return fmt.Errorf("error getting auth schema version for dumpDbUsersAndRoles: %v", err)
-		}
-		log.Logf(log.DebugLow, "using auth schema version %v", dump.authVersion)
-		if dump.authVersion < 3 {
-			return fmt.Errorf("backing up users and roles is only supported for "+
-				"deployments with auth schema versions >= 3, found: %v", dump.authVersion)
-		}
-	}
-
-	if dump.OutputOptions.Archive != "" {
-		//getArchiveOut gives us a WriteCloser to which we should write the archive
-		var archiveOut io.WriteCloser
-		archiveOut, err = dump.getArchiveOut()
-		if err != nil {
-			return err
-		}
-		dump.archive = &archive.Writer{
-			// The archive.Writer needs its own copy of archiveOut because things
-			// like the prelude are not written by the multiplexer.
-			Out: archiveOut,
-			Mux: archive.NewMultiplexer(archiveOut),
-		}
-		go dump.archive.Mux.Run()
-		defer func() {
-			// The Mux runs until its Control is closed
-			close(dump.archive.Mux.Control)
-			muxErr := <-dump.archive.Mux.Completed
-			archiveOut.Close()
-			if muxErr != nil {
-				if err != nil {
-					err = fmt.Errorf("%v && %v", err, muxErr)
-				} else {
-					err = muxErr
-				}
-				log.Logf(log.DebugLow, "mux returned an error: %v", err)
-			} else {
-				log.Logf(log.DebugLow, "mux completed successfully")
-			}
-		}()
-	}
-
 	// switch on what kind of execution to do
 	switch {
 	case dump.ToolOptions.DB == "" && dump.ToolOptions.Collection == "":
@@ -252,129 +182,6 @@ func (dump *MongoDump) Dump() (err error) {
 		}
 	}
 
-	if dump.OutputOptions.DumpDBUsersAndRoles && dump.ToolOptions.DB != "admin" {
-		err = dump.CreateUsersRolesVersionIntentsForDB(dump.ToolOptions.DB)
-		if err != nil {
-			return err
-		}
-	}
-
-	// verify we can use repair cursors
-	if dump.OutputOptions.Repair {
-		log.Log(log.DebugLow, "verifying that the connected server supports repairCursor")
-		if dump.isMongos {
-			return fmt.Errorf("cannot use --repair on mongos")
-		}
-		exampleIntent := dump.manager.Peek()
-		if exampleIntent != nil {
-			supported, err := dump.sessionProvider.SupportsRepairCursor(
-				exampleIntent.DB, exampleIntent.C)
-			if !supported {
-				return err // no extra context needed
-			}
-		}
-	}
-
-	// IO Phase I
-	// metadata, users, roles, and versions
-
-	// TODO, either remove this debug or improve the language
-	log.Logf(log.DebugHigh, "dump phase I: metadata, indexes, users, roles, version")
-
-	err = dump.DumpMetadata()
-	if err != nil {
-		return fmt.Errorf("error dumping metadata: %v", err)
-	}
-
-	if dump.OutputOptions.Archive != "" {
-		session, err := dump.sessionProvider.GetSession()
-		if err != nil {
-			return err
-		}
-		buildInfo, err := session.BuildInfo()
-		var serverVersion string
-		if err != nil {
-			log.Logf(log.Always, "warning, couldn't get version information from server: %v", err)
-			serverVersion = "unknown"
-		} else {
-			serverVersion = buildInfo.Version
-		}
-		dump.archive.Prelude, err = archive.NewPrelude(dump.manager, dump.ToolOptions.HiddenOptions.MaxProcs, serverVersion)
-		if err != nil {
-			return fmt.Errorf("creating archive prelude: %v", err)
-		}
-		err = dump.archive.Prelude.Write(dump.archive.Out)
-		if err != nil {
-			return fmt.Errorf("error writing metadata into archive: %v", err)
-		}
-	}
-
-	err = dump.DumpSystemIndexes()
-	if err != nil {
-		return fmt.Errorf("error dumping system indexes: %v", err)
-	}
-
-	if dump.ToolOptions.DB == "admin" || dump.ToolOptions.DB == "" {
-		err = dump.DumpUsersAndRoles()
-		if err != nil {
-			return fmt.Errorf("error dumping users and roles: %v", err)
-		}
-	}
-	if dump.OutputOptions.DumpDBUsersAndRoles {
-		log.Logf(log.Always, "dumping users and roles for %v", dump.ToolOptions.DB)
-		if dump.ToolOptions.DB == "admin" {
-			log.Logf(log.Always, "skipping users/roles dump, already dumped admin database")
-		} else {
-			err = dump.DumpUsersAndRolesForDB(dump.ToolOptions.DB)
-			if err != nil {
-				return fmt.Errorf("error dumping users and roles for db: %v", err)
-			}
-		}
-	}
-
-	// If oplog capturing is enabled, we first check the most recent
-	// oplog entry and save its timestamp, this will let us later
-	// copy all oplog entries that occurred while dumping, creating
-	// what is effectively a point-in-time snapshot.
-	if dump.OutputOptions.Oplog {
-		err := dump.determineOplogCollectionName()
-		if err != nil {
-			return fmt.Errorf("error finding oplog: %v", err)
-		}
-		log.Logf(log.Info, "getting most recent oplog timestamp")
-		dump.oplogStart, err = dump.getOplogStartTime()
-		if err != nil {
-			return fmt.Errorf("error getting oplog start: %v", err)
-		}
-	}
-
-	// IO Phase II
-	// regular collections
-
-	// TODO, either remove this debug or improve the language
-	log.Logf(log.DebugHigh, "dump phase II: regular collections")
-
-	// kick off the progress bar manager and begin dumping intents
-	dump.progressManager.Start()
-	defer dump.progressManager.Stop()
-
-	dump.termChan = make(chan struct{})
-	go dump.handleSignals()
-
-	if err := dump.DumpIntents(); err != nil {
-		return err
-	}
-
-	// IO Phase III
-	// oplog
-
-	// TODO, either remove this debug or improve the language
-	log.Logf(log.DebugLow, "dump phase III: the oplog")
-
-	// If we are capturing the oplog, we dump all oplog entries that occurred
-	// while dumping the database. Before and after dumping the oplog,
-	// we check to see if the oplog has rolled over (i.e. the most recent entry when
-	// we started still exist, so we know we haven't lost data)
 	if dump.OutputOptions.Oplog {
 		log.Logf(log.DebugLow, "checking if oplog entry %v still exists", dump.oplogStart)
 		exists, err := dump.checkOplogTimestampExists(dump.oplogStart)
@@ -386,15 +193,7 @@ func (dump *MongoDump) Dump() (err error) {
 			return fmt.Errorf("unable to check oplog for overflow: %v", err)
 		}
 		log.Logf(log.DebugHigh, "oplog entry %v still exists", dump.oplogStart)
-		
-		// Try to get the end timestamp.
-		end_ts, err := dump.getOplogStartTime()
-		log.Logf(log.Info, "end timestamp %v", end_ts)
-		if err != nil {
-			return fmt.Errorf(
-				"oplog catch failure: can't catch the last oplog when mongodump is finished")
-		}
-
+			
 		log.Logf(log.Always, "writing captured oplog to %v", dump.manager.Oplog().Location)
 		err = dump.DumpOplogAfterTimestamp(dump.oplogStart)
 		if err != nil {
