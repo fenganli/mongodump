@@ -394,6 +394,9 @@ func (dump *MongoDump) Dump() (err error) {
 			return fmt.Errorf(
 				"oplog catch failure: can't catch the last oplog when mongodump is finished")
 		}
+		
+		fmt.Println(uint32(int64(end_ts) >> 32), uint32(int64(end_ts)))
+
 
 		log.Logf(log.Always, "writing captured oplog to %v", dump.manager.Oplog().Location)
 		err = dump.DumpOplogAfterTimestamp(dump.oplogStart)
