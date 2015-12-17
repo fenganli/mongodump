@@ -42,6 +42,11 @@ func (dump *MongoDump) getOplogStartTime() (bson.MongoTimestamp, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Try to output the contents of the most RecentOplogEntry
+	fmt.Println("historyId:", mostRecentOplogEntry.HistoryID)
+	fmt.Println("Version:", mostRecentOplogEntry.Version)
+	fmt.Println("Operation:", mostRecentOplogEntry.Operation)
+	
 	return mostRecentOplogEntry.Timestamp, nil
 }
 
