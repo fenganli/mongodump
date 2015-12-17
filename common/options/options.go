@@ -40,8 +40,9 @@ type ToolOptions struct {
 	*Auth
 	*Kerberos
 	*Namespace
-	*HiddenOptions
-
+	*HiddenOptions	
+	*Timestamp
+	
 	// Force direct connection to the server and disable the
 	// drivers automatic repl set discovery logic.
 	Direct bool
@@ -53,7 +54,7 @@ type ToolOptions struct {
 	ReplicaSetName string
 
 	// Timestamp string "sec:increment"
-	// TS string
+        // TS string
 
 	// for caching the parser
 	parser *flags.Parser
@@ -104,6 +105,11 @@ func (v Verbosity) IsQuiet() bool {
 type Connection struct {
 	Host string `short:"h" long:"host" value-name:"<hostname>" description:"mongodb host to connect to (setname/host1,host2 for replica sets)"`
 	Port string `long:"port" value-name:"<port>" description:"server port (can also use --host hostname:port)"`
+}
+
+// Struct holding timestamp related options
+type Timestamp struct {
+	TS string `short:"t" long:"ts" value-name:"<timestamp>" description:"timestamp after which we want the primary's oplog"`
 }
 
 // Struct holding ssl-related options
@@ -161,6 +167,7 @@ func New(appName, usageStr string, enabled EnabledOptions) *ToolOptions {
 		AppName:    appName,
 		VersionStr: VersionStr,
 
+		Timestamp:     &Timestamp{},
 		General:       &General{},
 		Verbosity:     &Verbosity{},
 		Connection:    &Connection{},
@@ -222,6 +229,10 @@ func New(appName, usageStr string, enabled EnabledOptions) *ToolOptions {
 		if _, err := opts.parser.AddGroup("namespace options", "", opts.Namespace); err != nil {
 			panic(fmt.Errorf("couldn't register namespace options"))
 		}
+	}
+	
+	if _, err := opts.parser.AddGroup("timestamp options", "", opts.Timestamp); err != nil {
+		panic(fmt.Errorf("couldn't register timestamp options"))
 	}
 
 	if opts.MaxProcs <= 0 {

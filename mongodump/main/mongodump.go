@@ -16,6 +16,7 @@ func main() {
 	// --ts
 	// ts_string := flag.String("ts", "1:1", "time stamp string")
 	// flag.Parse()
+	// flag.StringVar(
 
 	opts := options.New("mongodump", mongodump.Usage, options.EnabledOptions{true, true, true})
 
@@ -49,7 +50,7 @@ func main() {
 	
 	// ts_string := flag.String("ts", "1:1", "time stamp string")
 	// flag.Parse()
-	ts_string := "1450325712:1"
+	// ts_string := "1450325712:1"
 
 	// init logger
 	log.SetVerbosity(opts.Verbosity)
@@ -64,8 +65,8 @@ func main() {
 		OutputOptions: outputOpts,
 		InputOptions:  inputOpts,
 	}
-
-	time_stamp, err := mongorestore.ParseTimestampFlag(ts_string)
+	// fmt.Printf(opts.TS)
+	time_stamp, err := mongorestore.ParseTimestampFlag(opts.TS)
 	if err != nil {
 		fmt.Errorf("couldn't get the timestamp from command arguments")
 		os.Exit(util.ExitError)
