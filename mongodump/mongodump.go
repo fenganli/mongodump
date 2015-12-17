@@ -386,6 +386,14 @@ func (dump *MongoDump) Dump() (err error) {
 			return fmt.Errorf("unable to check oplog for overflow: %v", err)
 		}
 		log.Logf(log.DebugHigh, "oplog entry %v still exists", dump.oplogStart)
+		
+		// Try to get the end timestamp.
+		end_ts, err := dump.getOplogStartTime()
+		log.Logf(log.Info, "end timestamp %v", end_ts)
+		if err != nil {
+			return fmt.Errorf(
+				"oplog catch failure: can't catch the last oplog when mongodump is finished")
+		}
 
 		log.Logf(log.Always, "writing captured oplog to %v", dump.manager.Oplog().Location)
 		err = dump.DumpOplogAfterTimestamp(dump.oplogStart)
